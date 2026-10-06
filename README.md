@@ -1,5 +1,4 @@
 # dsh-human-subagent
-
 A [DeepSeek Harness](https://github.com/deepseek-ai) (DSH) plugin that lets the **agent hand a task to you, the user**, instead of doing it itself.
 
 It registers a Host tool, `ask_user_as_subagent`. When the agent calls it, the Web UI shows a **timed task card** with the delegated task; you type an answer, hand it back, or let the timer run out. The answer becomes the tool result.
