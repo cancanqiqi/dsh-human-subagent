@@ -1,0 +1,53 @@
+{
+  "name": "@local/ask-user-subagent",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Delegates tasks from the agent to the user through a timed task card, weighted by a delegation-bias setting.",
+  "license": "MIT",
+  "author": "惨戚 <cancanqiqi>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cancanqiqi/dsh-human-subagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cancanqiqi/dsh-human-subagent/issues"
+  },
+  "homepage": "https://github.com/cancanqiqi/dsh-human-subagent#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "subagent"
+  ],
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "verify": "node dev/verify-host.mjs",
+    "verify:config": "node dev/verify-config.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

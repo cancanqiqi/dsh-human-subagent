@@ -1,0 +1,11 @@
+- insert:
+    - id: ask-user-subagent
+      name: '@local/ask-user-subagent'
+      config:
+        # 0 = the agent almost always completes the work itself.
+        # 50 = balanced. 100 = it looks for every reasonable chance to hand a
+        # task to the user. This is the only knob that steers delegation bias.
+        delegationBias: 50
+        # Seconds the agent waits for a user answer before the call settles as
+        # a timeout. `0` waits indefinitely.
+        timeoutSeconds: 0

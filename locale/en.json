@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "title": "Ask User as Subagent",
+    "description": "Lets the agent hand a task to you, the user, through a timed task card; a delegation-bias setting decides how readily it does so."
+  },
+  "delegationBias": {
+    "title": "Delegation bias",
+    "description": "0 keeps the agent working on its own; 100 makes it look for every reasonable chance to hand a task to you."
+  },
+  "timeoutSeconds": {
+    "title": "Wait limit (seconds)",
+    "description": "How long the agent waits for your answer before the call settles as a timeout. 0 waits indefinitely."
+  }
+}

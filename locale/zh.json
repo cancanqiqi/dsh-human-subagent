@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "title": "让用户当子 Agent",
+    "description": "让主 Agent 通过带计时的任务卡片把任务派发给你（用户）；派发倾向设置决定它多愿意这样做。"
+  },
+  "delegationBias": {
+    "title": "派发倾向",
+    "description": "0 表示让 Agent 尽量自己完成；100 表示只要有合理机会就把任务派发给你。"
+  },
+  "timeoutSeconds": {
+    "title": "等待上限（秒）",
+    "description": "Agent 等待你回答的最长时间，超时后该次调用以超时结束。0 表示一直等待。"
+  }
+}
