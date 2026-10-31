@@ -433,6 +433,22 @@ window.__ModuleLoader__.load({
   outline: none;
   border-color: var(--dsw-alias-brand-primary);
 }
+.aus-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  resize: vertical;
+}
+.aus-textarea:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+.aus-textarea::placeholder { color: var(--dsw-alias-label-secondary); }
 .aus-band {
   margin: 0;
   color: var(--dsw-alias-label-secondary);
@@ -477,6 +493,34 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The free-text field that describes this subagent to the main agent.
+     * @returns The field's element.
+     */
+    function ConfigText(props) {
+      const used = props.value.length;
+      return React.createElement(
+        'label',
+        { className: 'aus-field' },
+        React.createElement('span', { className: 'aus-field-label' }, props.label),
+        React.createElement('textarea', {
+          className: 'aus-textarea',
+          rows: 5,
+          maxLength: props.maxLength,
+          placeholder: props.placeholder,
+          value: props.value,
+          disabled: props.disabled,
+          onChange: (event) => props.onChange(event.target.value),
+        }),
+        React.createElement(
+          'span',
+          { className: 'aus-field-help' },
+          `${String(used)} / ${String(props.maxLength)}`,
+        ),
+        props.help === undefined ? null : React.createElement('p', { className: 'aus-field-help' }, props.help),
+      );
+    }
+
+    /**
      * The row's configuration page, shown from Settings → Plugins.
      *
      * It owns its own reader and writer over the plugin's Host route instead of
@@ -486,10 +530,14 @@ window.__ModuleLoader__.load({
      *
      * @returns The form in `view: 'page'`, or the one-line summary.
      */
+    /** Upper bound on the description, mirroring the Host's own limit. */
+    const BRIEF_LIMIT = 2000;
+
     function SettingsPage(props) {
       const [live, setLive] = React.useState(null);
       const [bias, setBias] = React.useState('50');
       const [limit, setLimit] = React.useState('0');
+      const [brief, setBrief] = React.useState('');
       const [status, setStatus] = React.useState('idle');
       const [reason, setReason] = React.useState('');
       const [firstLoad, setFirstLoad] = React.useState(true);
@@ -518,14 +566,25 @@ window.__ModuleLoader__.load({
         if (live === null || dirty) return;
         setBias(String(live.delegationBias));
         setLimit(String(live.timeoutSeconds));
+        setBrief(typeof live.subagentDescription === 'string' ? live.subagentDescription : '');
       }, [live, dirty]);
 
       if (props.view === 'summary') {
         return live === null
-          ? pick('Bias and wait limit for handing tasks to you.', '把任务派发给你的倾向值与等待上限。')
+          ? pick('Bias, wait limit, and the description the agent reads.', '派发倾向、等待上限，以及主 Agent 读到的描述。')
           : pick(
-              `Delegation bias ${String(live.delegationBias)}/100 · ${biasBand(Number(live.delegationBias))}`,
-              `派发倾向 ${String(live.delegationBias)}/100 · ${biasBand(Number(live.delegationBias))}`,
+              `Delegation bias ${String(live.delegationBias)}/100 · ${biasBand(Number(live.delegationBias))}${
+                typeof live.subagentDescription === 'string' && live.subagentDescription.length > 0
+                  ? ` · described as “${live.subagentDescription.slice(0, 60)}${
+                      live.subagentDescription.length > 60 ? '…' : ''
+                    }”`
+                  : ''
+              }`,
+              `派发倾向 ${String(live.delegationBias)}/100 · ${biasBand(Number(live.delegationBias))}${
+                typeof live.subagentDescription === 'string' && live.subagentDescription.length > 0
+                  ? ` · 描述为「${live.subagentDescription.slice(0, 60)}${live.subagentDescription.length > 60 ? '…' : ''}」`
+                  : ''
+              }`,
             );
       }
 
@@ -547,7 +606,11 @@ window.__ModuleLoader__.load({
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ delegationBias: biasValue, timeoutSeconds: limitValue }),
+            body: JSON.stringify({
+              delegationBias: biasValue,
+              timeoutSeconds: limitValue,
+              subagentDescription: brief,
+            }),
           });
           const body = await response.json().catch(() => ({}));
           if (!response.ok || body.ok !== true) {
@@ -563,6 +626,7 @@ window.__ModuleLoader__.load({
           setLive({
             delegationBias: body.delegationBias ?? biasValue,
             timeoutSeconds: body.timeoutSeconds ?? limitValue,
+            subagentDescription: typeof body.subagentDescription === 'string' ? body.subagentDescription : brief,
           });
           setStatus('saved');
         } catch (error) {
@@ -589,6 +653,7 @@ window.__ModuleLoader__.load({
         disabled,
         onChange: (next) => {
           if (key === 'bias') setBias(next);
+          else if (key === 'brief') setBrief(next);
           else setLimit(next);
           setDirty(true);
           setStatus('idle');
@@ -596,6 +661,7 @@ window.__ModuleLoader__.load({
       });
       const biasField = field('bias');
       const limitField = field('limit');
+      const briefField = field('brief');
 
       return React.createElement(
         'div',
@@ -631,6 +697,21 @@ window.__ModuleLoader__.load({
             '这是一个倾向值，不是强制开关：它决定 Agent 多愿意弹出任务卡片。它自己能完成的事（打招呼、问本机上的事）依然不会弹卡片。',
           ),
         ),
+        React.createElement(ConfigText, {
+          label: pick('Describe this subagent to the main agent', '向主 Agent 描述这个子 Agent'),
+          value: brief,
+          maxLength: BRIEF_LIMIT,
+          placeholder: pick(
+            'What is this subagent good at? What kind of task should the agent hand it?',
+            '这个子 Agent 擅长什么？主 Agent 该把什么样的任务交给它？',
+          ),
+          help: pick(
+            'This text is added to the main agent’s system prompt as a description of the subagent. Leave it empty to use the default framing only.',
+            '这段文字会作为对该子 Agent 的描述加入主 Agent 的系统提示词。留空则只用默认描述。',
+          ),
+          disabled: briefField.disabled,
+          onChange: briefField.onChange,
+        }),
         React.createElement(
           'div',
           { className: 'aus-config-actions' },

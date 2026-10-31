@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "让用户当子 Agent",
-    "description": "让主 Agent 通过带计时的任务卡片把任务派发给你（用户）；派发倾向设置决定它多愿意这样做。"
+    "description": "让主 Agent 通过带计时的任务卡片把任务派发给你（用户）；派发倾向设置决定它多愿意这样做，另外可以用一段自由文本告诉主 Agent 这个子 Agent 是什么。"
   },
   "delegationBias": {
     "title": "派发倾向",
@@ -10,5 +10,9 @@
   "timeoutSeconds": {
     "title": "等待上限（秒）",
     "description": "Agent 等待你回答的最长时间，超时后该次调用以超时结束。0 表示一直等待。"
+  },
+  "subagentDescription": {
+    "title": "向主 Agent 描述这个子 Agent",
+    "description": "这段文字会作为对该子 Agent 的描述加入主 Agent 的系统提示词：它擅长什么，该把什么样的任务交给它。留空则只用默认描述。"
   }
 }

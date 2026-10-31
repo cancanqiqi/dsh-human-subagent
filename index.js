@@ -54,6 +54,26 @@ function json(body, status = 200) {
   });
 }
 
+/**
+ * Render a free-text value as a YAML scalar for the profile patch.
+ *
+ * The document is YAML, so the description has to survive a round trip through
+ * the parser: an unquoted string would break on `: `, `#`, a leading `-`, or a
+ * newline. It is always emitted as a double-quoted single-line scalar, which is
+ * the one form YAML reads back as exactly the text that went in.
+ *
+ * @param value - the text to render.
+ * @returns The quoted scalar.
+ */
+function quoteYaml(value) {
+  const escaped = String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `"${escaped}"`;
+}
+
 /** Settle one pending call exactly once. */
 function settle(record, outcome) {
   if (record.settled) return false;
@@ -61,6 +81,46 @@ function settle(record, outcome) {
   pendingCalls.delete(record.callId);
   record.resolve(outcome);
   return true;
+}
+
+/** Upper bound on the configured description, in characters. */
+const BRIEF_LIMIT = 2000;
+
+/**
+ * Normalize the configured description into one model-facing paragraph.
+ *
+ * The setting is free text, so it is flattened to a single line: a blank line or
+ * a stray `##` inside a system-prompt section would otherwise read as structure
+ * the caller never chose. This only normalizes; the length limit is enforced
+ * where the value enters, so an over-long value is refused rather than silently
+ * truncated.
+ *
+ * @param value - the raw configured value.
+ * @returns The cleaned description, or an empty string.
+ */
+function sanitizeBrief(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Build the model-facing description of this subagent from the setting.
+ *
+ * The person configuring the deployment writes what this subagent is good at —
+ * its remit, its specialties, the kind of task it should be handed. The text is
+ * presented as a description of the subagent and nothing else: it is the caller's
+ * briefing on a delegation target, which keeps the framing the tool already uses.
+ *
+ * @param description - the raw configured description.
+ * @returns The prompt text, or undefined when the setting is empty.
+ */
+function subagentBrief(description) {
+  const brief = sanitizeBrief(description).slice(0, BRIEF_LIMIT);
+  if (brief.length === 0) return undefined;
+  return [
+    `What this subagent is: ${brief}`,
+    'Treat that as its remit and its specialties. It describes what the subagent is good at, so prefer handing it the work that matches it, and phrase each delegated task with that in mind.',
+  ].join(' ');
 }
 
 /**
@@ -153,6 +213,14 @@ const Config = z.object({
     .role('volatile')
     .description(
       'Seconds to wait for your answer before the call settles as a timeout. 0 waits indefinitely.',
+    ),
+  subagentDescription: z
+    .string()
+    .max(BRIEF_LIMIT)
+    .default('')
+    .role('volatile')
+    .description(
+      'How the main agent should understand this subagent: what it is good at, and what kind of task to hand it. Empty leaves the agent with the default framing.',
     ),
 });
 
@@ -291,6 +359,7 @@ function definition(ctx, timeoutSeconds) {
 function apply(ctx, config = {}) {
   const bias = config.delegationBias ?? 50;
   const timeoutSeconds = config.timeoutSeconds ?? 0;
+  const brief = sanitizeBrief(config.subagentDescription ?? '');
 
   /** Profile entry the Loader owns for this row; candidate settings namespace. */
   const entryId = `include:${name}`;
@@ -307,6 +376,21 @@ function apply(ctx, config = {}) {
       }),
     'ask-user-subagent: delegation bias',
   );
+
+  // The configured description is its own section so the bias bands stay readable
+  // and an empty setting costs nothing at all.
+  const briefText = subagentBrief(brief);
+  if (briefText !== undefined) {
+    ctx.effect(
+      () =>
+        ctx.systemPrompt.section({
+          name: 'tool:ask_user_as_subagent:brief',
+          order: 2802,
+          text: briefText,
+        }),
+      'ask-user-subagent: subagent description',
+    );
+  }
 
   // The maximum band needs to land on the decision, not only in the standing
   // prompt: a runtime-context entry rides the very next request.
@@ -360,13 +444,29 @@ function apply(ctx, config = {}) {
         const found = new RegExp(`^\\s+${key}:\\s*(-?\\d+)\\s*$`, 'm').exec(row);
         return found === null ? undefined : Number(found[1]);
       };
-      return { delegationBias: readKey('delegationBias'), timeoutSeconds: readKey('timeoutSeconds') };
+      const readString = (key) => {
+        const found = new RegExp(`^\\s+${key}:\\s*(.*)$`, 'm').exec(row);
+        if (found === null) return undefined;
+        const raw = found[1].trim();
+        const doubleQuoted = /^"((?:[^"\\]|\\.)*)"$/.exec(raw);
+        if (doubleQuoted !== null) {
+          return doubleQuoted[1].replace(/\\(.)/g, (_match, escaped) => (escaped === 'n' ? '\n' : escaped));
+        }
+        const singleQuoted = /^'((?:[^']|'')*)'$/.exec(raw);
+        if (singleQuoted !== null) return singleQuoted[1].replace(/''/g, "'");
+        return raw.length === 0 || raw === '~' || raw === 'null' ? '' : raw;
+      };
+      return {
+        delegationBias: readKey('delegationBias'),
+        timeoutSeconds: readKey('timeoutSeconds'),
+        subagentDescription: readString('subagentDescription'),
+      };
     } catch {
       return undefined;
     }
   };
 
-  /** Read the two values the settings page edits, preferring what the plugin is actually running. */
+  /** Read the three values the settings page edits, preferring what the plugin is actually running. */
   const readConfig = async () => {
     const descriptors = ctx.settings.describe();
     const namespace = settingsNamespace();
@@ -375,9 +475,14 @@ function apply(ctx, config = {}) {
     const fromPatch = await readPatchValues();
     const pick = (value, key, fallback) =>
       typeof live?.[key] === 'number' ? live[key] : typeof value === 'number' ? value : fallback;
+    const pickText = (value, key, fallback) =>
+      typeof live?.[key] === 'string' ? live[key] : typeof value === 'string' ? value : fallback;
     return {
       delegationBias: pick(fromPatch?.delegationBias, 'delegationBias', bias),
       timeoutSeconds: pick(fromPatch?.timeoutSeconds, 'timeoutSeconds', timeoutSeconds),
+      subagentDescription: sanitizeBrief(
+        pickText(fromPatch?.subagentDescription, 'subagentDescription', brief),
+      ),
       revision: descriptor?.revision,
       namespace,
     };
@@ -398,9 +503,10 @@ function apply(ctx, config = {}) {
    *
    * @param nextBias - validated delegation bias.
    * @param nextLimit - validated wait limit in seconds.
+   * @param nextBrief - validated subagent description.
    * @returns The path written.
    */
-  const writeProfilePatch = async (nextBias, nextLimit) => {
+  const writeProfilePatch = async (nextBias, nextLimit, nextBrief) => {
     const path = await ctx.settings.prepareDocument();
     const text = await readFile(path, 'utf8');
     const lines = text.split(/\r?\n/);
@@ -423,17 +529,25 @@ function apply(ctx, config = {}) {
     const keyLine = (key, value) => `    ${key}: ${String(value)}`;
     if (configStart < 0) {
       // No config block yet: add one directly under the row's identity keys.
-      lines.splice(rowStart + 1, 0, '  config:', keyLine('delegationBias', nextBias), keyLine('timeoutSeconds', nextLimit));
+      lines.splice(
+        rowStart + 1,
+        0,
+        '  config:',
+        keyLine('delegationBias', nextBias),
+        keyLine('timeoutSeconds', nextLimit),
+        keyLine('subagentDescription', quoteYaml(nextBrief)),
+      );
       configStart = rowStart + 1;
     } else {
       const setKey = (key, value) => {
         const pattern = new RegExp(`^(\\s+)${key}:\\s*.*$`);
         const at = lines.findIndex((line, index) => index > configStart && index < rowEnd && pattern.test(line));
         if (at < 0) lines.splice(configStart + 1, 0, keyLine(key, value));
-        else lines[at] = lines[at].replace(pattern, `$1${key}: ${String(value)}`);
+        else lines[at] = lines[at].replace(pattern, (_match, indent) => `${indent}${key}: ${String(value)}`);
       };
       setKey('delegationBias', nextBias);
       setKey('timeoutSeconds', nextLimit);
+      setKey('subagentDescription', quoteYaml(nextBrief));
     }
     const next = lines.join('\n');
     if (next === text) return path;
@@ -469,6 +583,14 @@ function apply(ctx, config = {}) {
           if (!Number.isInteger(nextLimit) || nextLimit < 0) {
             return json({ error: 'timeoutSeconds must be a whole number of seconds' }, 400);
           }
+          if (typeof body?.subagentDescription !== 'string') {
+            return json({ error: 'subagentDescription must be a string' }, 400);
+          }
+          const rawBrief = body.subagentDescription;
+          const nextBrief = sanitizeBrief(rawBrief);
+          if (rawBrief.length > BRIEF_LIMIT || nextBrief.length > BRIEF_LIMIT) {
+            return json({ error: `subagentDescription must be at most ${String(BRIEF_LIMIT)} characters` }, 400);
+          }
 
           // Preferred path: the settings service, which validates and reconciles
           // the change itself. It only exposes a namespace for some rows, so a
@@ -477,7 +599,7 @@ function apply(ctx, config = {}) {
             try {
               await ctx.settings.update(
                 current.namespace,
-                { delegationBias: nextBias, timeoutSeconds: nextLimit },
+                { delegationBias: nextBias, timeoutSeconds: nextLimit, subagentDescription: nextBrief },
                 current.revision,
               );
               return json({ ok: true, via: 'settings', ...(await readConfig()) });
@@ -487,7 +609,7 @@ function apply(ctx, config = {}) {
           }
 
           try {
-            await writeProfilePatch(nextBias, nextLimit);
+            await writeProfilePatch(nextBias, nextLimit, nextBrief);
           } catch (error) {
             return json({ error: `could not write the profile patch: ${String(error?.message ?? error)}` }, 409);
           }
@@ -546,4 +668,14 @@ function apply(ctx, config = {}) {
   );
 }
 
-export { apply, biasGuidance, Config, definition, delegateFirstContext, inject, name };
+export {
+  apply,
+  biasGuidance,
+  Config,
+  definition,
+  delegateFirstContext,
+  inject,
+  name,
+  sanitizeBrief,
+  subagentBrief,
+};

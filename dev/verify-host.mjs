@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, biasGuidance, Config, delegateFirstContext } from '../index.js';
+import { apply, biasGuidance, Config, delegateFirstContext, sanitizeBrief, subagentBrief } from '../index.js';
 
 /** A profile patch document with comments and a second row, for the fallback write. */
 const SAMPLE_PATCH = `# Your patch layer for this dsh profile.
@@ -27,6 +27,7 @@ const SAMPLE_PATCH = `# Your patch layer for this dsh profile.
   config:
     delegationBias: 80
     timeoutSeconds: 0
+    subagentDescription: ""
 `;
 
 const patchDir = await mkdtemp(join(tmpdir(), 'aus-patch-'));
@@ -37,6 +38,7 @@ await writeFile(patchFile, SAMPLE_PATCH, 'utf8');
 const fake = {
   tool: undefined,
   section: undefined,
+  sections: [],
   context: undefined,
   route: undefined,
   configRoute: undefined,
@@ -45,7 +47,7 @@ const fake = {
 /** Stateful stand-in for the Host settings service; `namespace: null` means it serves no namespace for this row. */
 const settingsState = {
   namespace: null,
-  value: { delegationBias: 80, timeoutSeconds: 0 },
+  value: { delegationBias: 80, timeoutSeconds: 0, subagentDescription: '' },
   revision: 1,
   updates: [],
 };
@@ -64,7 +66,8 @@ const ctx = {
   },
   systemPrompt: {
     section: (section) => {
-      fake.section = section;
+      if (section.name === 'tool:ask_user_as_subagent') fake.section = section;
+      fake.sections.push(section);
       return () => {};
     },
     context: (context) => {
@@ -173,6 +176,36 @@ console.log('bias bands:');
   check('the runtime context quotes the bias', /maximum \(100\/100\)/.test(context), context);
 }
 
+console.log('subagent description:');
+{
+  // An empty setting must cost nothing: no section, no prompt text.
+  check('an empty description registers no section', fake.sections.length === 1, JSON.stringify(fake.sections.map((entry) => entry.name)));
+  check('an empty description yields no text', subagentBrief('') === undefined);
+
+  // A configured description becomes its own model-facing section.
+  const brief = subagentBrief('A reviewer that reads source code and reports defects.');
+  check('a configured description yields text', typeof brief === 'string' && /A reviewer that reads source code/.test(brief), brief);
+  check('the description is framed as what the subagent is', /What this subagent is:/.test(brief ?? ''), brief);
+  check('the description tells the caller how to use it', /Treat that as its remit/.test(brief ?? ''), brief);
+  check(
+    'the description never says user, person, human, or card',
+    !/\buser\b|\bperson\b|\bhuman\b|\bcard\b/i.test(brief ?? ''),
+    brief,
+  );
+
+  // Free text is flattened: a newline or heading must not become prompt structure.
+  check('whitespace collapses to one line', sanitizeBrief('a\n\n  b\tc') === 'a b c', sanitizeBrief('a\n\n  b\tc'));
+  check('surrounding whitespace is trimmed', sanitizeBrief('  x  ') === 'x');
+  check('non-string input yields empty', sanitizeBrief(undefined) === '' && sanitizeBrief(42) === '');
+  // The route refuses an over-long value outright; this is the last-resort clamp
+  // for a value that arrives from the profile patch without passing the route.
+  const clamped = subagentBrief('y'.repeat(2100)) ?? '';
+  check('an over-long value is clamped, not echoed whole', !/y{2050}/.test(clamped) && /y{1900}/.test(clamped), `${String(clamped.length)} chars`);
+
+  const collapsed = subagentBrief('line one\nline two');
+  check('a multi-line description becomes one paragraph', collapsed === undefined ? false : !/\n/.test(collapsed), collapsed);
+}
+
 console.log('model-facing framing:');
 {
   // The caller must read this as an ordinary subagent, never as a person at a keyboard.
@@ -200,9 +233,15 @@ console.log('model-facing framing:');
 console.log('row config schema:');
 {
   const defaults = Config['~standard'].validate({});
-  check('declares both defaults', defaults.value?.delegationBias === 50 && defaults.value?.timeoutSeconds === 0, JSON.stringify(defaults));
+  check(
+    'declares all three defaults',
+    defaults.value?.delegationBias === 50 && defaults.value?.timeoutSeconds === 0 && defaults.value?.subagentDescription === '',
+    JSON.stringify(defaults),
+  );
   const tooHigh = Config['~standard'].validate({ delegationBias: 500 });
   check('rejects an out-of-range bias', (tooHigh.issues?.length ?? 0) > 0, JSON.stringify(tooHigh));
+  const tooLong = Config['~standard'].validate({ subagentDescription: 'x'.repeat(2001) });
+  check('rejects an over-long description', (tooLong.issues?.length ?? 0) > 0, JSON.stringify(tooLong));
   const projected = Config.toJSON();
   check('projects a JSON schema for the settings form', typeof projected === 'object' && projected.uid !== undefined);
 }
@@ -242,26 +281,43 @@ console.log('settings route:');
 {
   const read = await (await fetch(`${base}/api/local/ask-user-subagent/config`)).json();
   check('reads the live values', read.delegationBias === 80 && read.timeoutSeconds === 0, JSON.stringify(read));
+  check('reads the empty description', read.subagentDescription === '', JSON.stringify(read));
   check('reports no settings namespace for this row', read.namespace === undefined, JSON.stringify(read));
 
   const refuseBias = await fetch(`${base}/api/local/ask-user-subagent/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ delegationBias: 500, timeoutSeconds: 0 }),
+    body: JSON.stringify({ delegationBias: 500, timeoutSeconds: 0, subagentDescription: '' }),
   });
   check('refuses an out-of-range bias', refuseBias.status === 400, `HTTP ${String(refuseBias.status)}`);
 
   const refuseLimit = await fetch(`${base}/api/local/ask-user-subagent/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ delegationBias: 30, timeoutSeconds: -5 }),
+    body: JSON.stringify({ delegationBias: 30, timeoutSeconds: -5, subagentDescription: '' }),
   });
   check('refuses a negative wait limit', refuseLimit.status === 400, `HTTP ${String(refuseLimit.status)}`);
 
+  const refuseBriefType = await fetch(`${base}/api/local/ask-user-subagent/config`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ delegationBias: 30, timeoutSeconds: 0, subagentDescription: 12 }),
+  });
+  check('refuses a non-string description', refuseBriefType.status === 400, `HTTP ${String(refuseBriefType.status)}`);
+
+  const refuseBriefLength = await fetch(`${base}/api/local/ask-user-subagent/config`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ delegationBias: 30, timeoutSeconds: 0, subagentDescription: 'x'.repeat(2001) }),
+  });
+  check('refuses an over-long description', refuseBriefLength.status === 400, `HTTP ${String(refuseBriefLength.status)}`);
+
+  // A description with YAML-hostile characters must survive the document write.
+  const tricky = 'Reviews code: prefers "strict" mode # and leading - dashes';
   const accepted = await fetch(`${base}/api/local/ask-user-subagent/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ delegationBias: 20, timeoutSeconds: 90 }),
+    body: JSON.stringify({ delegationBias: 20, timeoutSeconds: 90, subagentDescription: tricky }),
   });
   const saved = await accepted.json();
   check('accepts a valid change without a settings namespace', accepted.status === 200 && saved.ok === true, JSON.stringify(saved));
@@ -271,24 +327,38 @@ console.log('settings route:');
   const rewritten = await readFile(patchFile, 'utf8');
   check('rewrites the bias in place', /^ {4}delegationBias: 20$/m.test(rewritten), rewritten);
   check('rewrites the wait limit in place', /^ {4}timeoutSeconds: 90$/m.test(rewritten), rewritten);
+  check(
+    'writes the description as one quoted scalar',
+    /^ {4}subagentDescription: ".*"$/m.test(rewritten) && !/^ {4}subagentDescription: .*\n.*#/m.test(rewritten),
+    rewritten,
+  );
   check('keeps the other row untouched', rewritten.includes('reasoningEffort') === false && rewritten.includes('model: deepseek-flash'), rewritten);
   check('keeps the file comments', rewritten.includes('# Local plugin: hands a task to the user.'), rewritten);
   check('keeps the row identity', /^- id: ask-user-subagent$/m.test(rewritten) && /^ {2}name: "@local\/ask-user-subagent"$/m.test(rewritten), rewritten);
   // The running profile re-reads the document it watches, so the next GET sees the write.
   const afterWrite = await (await fetch(`${base}/api/local/ask-user-subagent/config`)).json();
-  check('the change is visible on the next read', afterWrite.delegationBias === 20 && afterWrite.timeoutSeconds === 90, JSON.stringify(afterWrite));
+  check(
+    'the change is visible on the next read',
+    afterWrite.delegationBias === 20 && afterWrite.timeoutSeconds === 90 && afterWrite.subagentDescription === tricky,
+    JSON.stringify(afterWrite),
+  );
 
   // A row the settings service does serve must go through it instead.
   settingsState.namespace = 'ask-user-subagent';
   const viaSettings = await fetch(`${base}/api/local/ask-user-subagent/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ delegationBias: 35, timeoutSeconds: 0 }),
+    body: JSON.stringify({ delegationBias: 35, timeoutSeconds: 0, subagentDescription: 'A specialist in license headers.' }),
   });
   const viaSettingsBody = await viaSettings.json();
   check('prefers the settings service when it serves the row', viaSettings.status === 200 && viaSettingsBody.via === 'settings', JSON.stringify(viaSettingsBody));
   check('writes through the settings service', settingsState.updates.length === 1, JSON.stringify(settingsState.updates));
   check('writes the exact fields', settingsState.updates[0]?.patch?.delegationBias === 35 && settingsState.updates[0]?.patch?.timeoutSeconds === 0, JSON.stringify(settingsState.updates[0]));
+  check(
+    'writes the description through the settings service',
+    settingsState.updates[0]?.patch?.subagentDescription === 'A specialist in license headers.',
+    JSON.stringify(settingsState.updates[0]),
+  );
   check('addresses the row entry', settingsState.updates[0]?.ns === 'ask-user-subagent', String(settingsState.updates[0]?.ns));
   check('fences the write with the read revision', settingsState.updates[0]?.expectedRevision === 1, String(settingsState.updates[0]?.expectedRevision));
 
@@ -298,7 +368,7 @@ console.log('settings route:');
   const viaLoaderId = await fetch(`${base}/api/local/ask-user-subagent/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ delegationBias: 40, timeoutSeconds: 0 }),
+    body: JSON.stringify({ delegationBias: 40, timeoutSeconds: 0, subagentDescription: '' }),
   });
   const viaLoaderIdBody = await viaLoaderId.json();
   check('resolves the loader entry id as well', viaLoaderId.status === 200 && settingsState.updates[1]?.ns === 'include:ask-user-subagent', JSON.stringify(viaLoaderIdBody));

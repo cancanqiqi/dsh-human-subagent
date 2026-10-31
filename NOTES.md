@@ -4,18 +4,26 @@
 
 - Package: `@local/ask-user-subagent`, installed into the profile from this repository directory
   (`link:` dependency).
-- Row id: `ask-user-subagent`, config `delegationBias` (0–100, default 50) and `timeoutSeconds` (0 = wait forever).
+- Row id: `ask-user-subagent`, config `delegationBias` (0–100, default 50),
+  `timeoutSeconds` (0 = wait forever), and `subagentDescription` (free text, ≤ 2000, default empty).
 - Tool: `ask_user_as_subagent` (Host half, `index.js`).
 - Client entry: `shell.overlay` id `ask-user-subagent` (Client half, `client.js`).
+- Settings page: `plugins.row.config` key `@local/ask-user-subagent#ask-user-subagent`.
 - Transport: authenticated `ctx.connection.fetch` route `/api/local/ask-user-subagent/tasks`
   (GET = pending tasks, POST = `answer` / `cancel`). It must keep the `/api` prefix: the
   Connection carrier only serves exact fetch routes under that prefix.
+- Prompt entries: section `tool:ask_user_as_subagent` (order 2801, bias bands) and
+  section `tool:ask_user_as_subagent:brief` (order 2802, the configured description;
+  registered only when the setting is non-empty).
 
 ## Verified
 
-- `node dev/verify-host.mjs` — 24 checks against the real Host module over real HTTP:
-  registration, prompt-section rendering per bias band, pending-task visibility,
-  answer / cancel / abort settlement, empty-input rejection, subagent refusal, unknown-op handling.
+- `node dev/verify-host.mjs` — 90 checks against the real Host module over real HTTP:
+  registration, prompt-section rendering per bias band, description injection /
+  flattening / clamping, pending-task visibility, answer / cancel / abort settlement,
+  empty-input rejection, subagent refusal, unknown-op handling.
+- `node dev/verify-config.mjs` — 12 checks: the settings service projects all three
+  fields into the editable form and each keeps `role: 'volatile'`.
 - Live Host inspection: `ask_user_as_subagent` is in the Agent's tool list.
 - Live Client inspection: slot `shell.overlay` occupant `ask-user-subagent` is `active`.
 - Live end-to-end through the GUI: the card rendered the task, the timer ran, and a submitted

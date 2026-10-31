@@ -9,3 +9,7 @@
         # Seconds the agent waits for a user answer before the call settles as
         # a timeout. `0` waits indefinitely.
         timeoutSeconds: 0
+        # How the main agent should understand this subagent: what it is good
+        # at, and what kind of task to hand it. Added to the agent's system
+        # prompt as a description of the subagent. Empty = default framing.
+        subagentDescription: ''

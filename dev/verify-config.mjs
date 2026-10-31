@@ -54,18 +54,30 @@ check('a form exists', form !== undefined);
 check('the form is an object schema', form?.type === 'object');
 check('delegationBias is projected', form?.dict?.delegationBias !== undefined);
 check('timeoutSeconds is projected', form?.dict?.timeoutSeconds !== undefined);
+check('subagentDescription is projected', form?.dict?.subagentDescription !== undefined);
 
 // A schemastery node holds `refs` keyed by uid, so a field is reachable through
 // the root's `dict` entry -> that node's `refs`.
 const bias = deref(form?.dict?.delegationBias);
 const limit = deref(form?.dict?.timeoutSeconds);
+const brief = deref(form?.dict?.subagentDescription);
 check('bias keeps its bounds and default', bias?.meta?.min === 0 && bias?.meta?.max === 100 && bias?.meta?.default === 50, JSON.stringify(bias?.meta));
 check('limit keeps its bounds and default', limit?.meta?.min === 0 && limit?.meta?.default === 0, JSON.stringify(limit?.meta));
+check('the description keeps its type and default', brief?.type === 'string' && brief?.meta?.default === '', JSON.stringify(brief?.meta));
+check('the description keeps its length limit', brief?.meta?.max === 2000, JSON.stringify(brief?.meta));
 // The marker stays on the projected field on purpose: the settings service
 // re-reads it (`isVolatilePath`) to admit a write, so stripping it would give a
 // form that looks editable and refuses to save.
-check('the volatile marker survives so writes are admissible', bias?.meta?.role === 'volatile' && limit?.meta?.role === 'volatile');
-check('descriptions survive', typeof bias?.meta?.description === 'string' && typeof limit?.meta?.description === 'string');
+check(
+  'the volatile marker survives so writes are admissible',
+  bias?.meta?.role === 'volatile' && limit?.meta?.role === 'volatile' && brief?.meta?.role === 'volatile',
+);
+check(
+  'descriptions survive',
+  typeof bias?.meta?.description === 'string' &&
+    typeof limit?.meta?.description === 'string' &&
+    typeof brief?.meta?.description === 'string',
+);
 
 console.log('values the page would show:');
 const resolved = Config['~standard'].validate({});
@@ -75,7 +87,11 @@ const projected = Object.fromEntries(
     return field === undefined ? [] : [[key, field]];
   }),
 );
-check('all fields have a value', projected.delegationBias === 50 && projected.timeoutSeconds === 0, JSON.stringify(projected));
+check(
+  'all fields have a value',
+  projected.delegationBias === 50 && projected.timeoutSeconds === 0 && projected.subagentDescription === '',
+  JSON.stringify(projected),
+);
 
 console.log('');
 if (failures.length === 0) {
