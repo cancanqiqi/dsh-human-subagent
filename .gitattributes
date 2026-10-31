@@ -1,0 +1,6 @@
+# Normalize line endings in the repository: LF on checkout everywhere.
+# Windows users keep LF in the working tree too, so a diff never mixes endings.
+* text=auto eol=lf
+
+# Binary or generated files stay untouched.
+*.svg text
