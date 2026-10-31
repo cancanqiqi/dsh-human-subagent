@@ -98,3 +98,5 @@ Host-side changes require a `dsh web` restart (a plugin module loads once per pr
 ## License
 
 [MIT](./LICENSE) © 2025 惨戚 (cancanqiqi)
+
+Release history: [CHANGELOG.md](./CHANGELOG.md). Current version **1.1.0**.
